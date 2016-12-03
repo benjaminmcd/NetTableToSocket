@@ -1,4 +1,4 @@
-package gov.nasa.HoloFirst;
+package HoloFirst;
 
 import java.net.*;
 import java.nio.ByteBuffer;
