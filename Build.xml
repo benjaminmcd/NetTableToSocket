@@ -8,7 +8,7 @@
 	    <jar jarfile="dist/NetTableToSocket.jar" basedir="bin/" includes="**/*.class">
 	        <manifest>
 	            <attribute name="Main-Class" value="HoloFirst.NetTableToSocket"/>
-	            <attribute name="Class-Path" value="WPINetTable.jar"/> 
+	            <attribute name="Class-Path" value="SmartDashboard.jar WPINetTable.jar"/> 
 	        </manifest>
 	    </jar>
 		
