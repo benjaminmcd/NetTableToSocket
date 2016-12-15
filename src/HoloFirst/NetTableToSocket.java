@@ -30,7 +30,7 @@ public class NetTableToSocket
 {
 	enum  ValueType
 	{
-		DOUBLE, FLOAT, INT, SHORT, BOOLEAN
+		DOUBLE, FLOAT, INT, SHORT, BOOLEAN, LONG
 	};
 	
 	class ValueItem
@@ -335,36 +335,40 @@ public class NetTableToSocket
 					
 					String type_str = element.getAttribute("type").toLowerCase();
 					String default_value = element.getAttribute("default");
-									
-					if (type_str.equals("double"))
-					{
-						addValue(key, ValueType.DOUBLE, new Double(default_value));
-						message_size += 8;
-					}
-					else if (type_str.equals("float"))
-					{
-						addValue(key, ValueType.FLOAT, new Float(default_value));
-						message_size += 4;
-					}
-					else if (type_str.startsWith("int"))
-					{
-						addValue(key, ValueType.INT, new Integer(default_value));
-						message_size += 4;
-					}
-					else if (type_str.equals("short"))
-					{
-						addValue(key, ValueType.SHORT, new Short(default_value));
-						message_size += 2;
-					}
-					else if (type_str.startsWith("bool"))
-					{
-						addValue(key, ValueType.BOOLEAN, new Boolean(default_value));
-						message_size += 1;
-					}
-					else
-					{
-						System.out.println("ERROR parsing configuration file, unsupported value type of " + type_str);
-					}					     
+					
+					switch(type_str) {
+						case("long"):
+						case("int64"):
+							addValue(key, ValueType.LONG, new Long(default_value));
+							message_size += 8;
+							break;
+						case("int"):
+						case("int32"):
+							addValue(key, ValueType.INT, new Integer(default_value));
+							message_size += 4;
+							break;
+						case("short"):
+						case("int16"):
+							addValue(key, ValueType.SHORT, new Short(default_value));
+							message_size += 2;
+							break;
+						case("single"):
+						case("float"):
+							addValue(key, ValueType.FLOAT, new Float(default_value));
+							message_size += 4;
+							break;
+						case("double"):
+							addValue(key, ValueType.DOUBLE, new Double(default_value));
+							message_size += 8;
+							break;
+						case("bool"):
+						case("boolean"):
+							addValue(key, ValueType.BOOLEAN, new Boolean(default_value));
+							message_size += 1;
+							break;
+						default:
+							System.out.println("ERROR parsing configuration file, unsupported value type of " + type_str);
+					}				     
 				}
 				else
 				{
@@ -419,7 +423,8 @@ public class NetTableToSocket
 				{
 					     if ( itm.value instanceof Double ) 	bb.putDouble((double)(((Double)(itm.value)).doubleValue()));
 					else if ( itm.value instanceof Float ) 		bb.putDouble((double)(((Float)(itm.value)).floatValue()));							
-					else if ( itm.value instanceof Integer ) 	bb.putDouble((double)(((Integer)(itm.value)).intValue()));							
+					else if ( itm.value instanceof Integer ) 	bb.putDouble((double)(((Integer)(itm.value)).intValue()));
+					else if ( itm.value instanceof Long ) 		bb.putDouble((double)(((Long)(itm.value)).longValue()));							
 					else if ( itm.value instanceof Short ) 		bb.putDouble((double)(((Short)(itm.value)).shortValue()));							
 					else if ( itm.value instanceof Boolean ) 	bb.putDouble((double)(((Boolean)(itm.value)).booleanValue()?1.0:0.0));
 					else System.out.println("unsupported data conversion for index " + idx);
@@ -430,7 +435,8 @@ public class NetTableToSocket
 						 if ( itm.value instanceof Float ) 		bb.putFloat((float)(((Float)(itm.value)).floatValue()));
 				    else if ( itm.value instanceof Double ) 	bb.putFloat((float)(((Double)(itm.value)).doubleValue()));							
 					else if ( itm.value instanceof Integer ) 	bb.putFloat((float)(((Integer)(itm.value)).intValue()));							
-					else if ( itm.value instanceof Short ) 		bb.putFloat((float)(((Short)(itm.value)).shortValue()));							
+					else if ( itm.value instanceof Short ) 		bb.putFloat((float)(((Short)(itm.value)).shortValue()));
+					else if ( itm.value instanceof Long ) 		bb.putFloat((float)(((Long)(itm.value)).longValue()));							
 					else if ( itm.value instanceof Boolean ) 	bb.putFloat((float)(((Boolean)(itm.value)).booleanValue()?1.0f:0.0f));
 					else System.out.println("unsupported data conversion for index " + idx);
 				} break;
@@ -438,7 +444,8 @@ public class NetTableToSocket
 				case INT:
 				{
 						 if ( itm.value instanceof Integer ) 	bb.putInt((int)(((Integer)(itm.value)).intValue()));							
-					else if ( itm.value instanceof Short ) 		bb.putInt((int)(((Short)(itm.value)).shortValue()));							
+					else if ( itm.value instanceof Short ) 		bb.putInt((int)(((Short)(itm.value)).shortValue()));	
+					else if ( itm.value instanceof Long ) 		bb.putInt((int)(((Long)(itm.value)).longValue()));						
 					else if ( itm.value instanceof Boolean ) 	bb.putInt((int)(((Boolean)(itm.value)).booleanValue()?1:0));
 					else if ( itm.value instanceof Float ) 		bb.putInt((int)(((Float)(itm.value)).floatValue()));
 				    else if ( itm.value instanceof Double ) 	bb.putInt((int)(((Double)(itm.value)).doubleValue()));							
@@ -451,7 +458,19 @@ public class NetTableToSocket
 					else if ( itm.value instanceof Integer ) 	bb.putShort((short)(((Integer)(itm.value)).intValue()));							
 					else if ( itm.value instanceof Boolean ) 	bb.putShort((short)(((Boolean)(itm.value)).booleanValue()?1:0));
 					else if ( itm.value instanceof Float ) 		bb.putShort((short)(((Float)(itm.value)).floatValue()));
+					else if ( itm.value instanceof Long ) 		bb.putShort((short)(((Long)(itm.value)).longValue()));
 				    else if ( itm.value instanceof Double ) 	bb.putShort((short)(((Double)(itm.value)).doubleValue()));							
+					else System.out.println("unsupported data conversion for index " + idx);
+				} break;
+				
+				case LONG:
+				{
+					 	 if ( itm.value instanceof Long ) 		bb.putLong((long)(((Long)(itm.value)).longValue()));							
+					else if ( itm.value instanceof Integer ) 	bb.putLong((long)(((Integer)(itm.value)).intValue()));							
+					else if ( itm.value instanceof Boolean ) 	bb.putLong((long)(((Boolean)(itm.value)).booleanValue()?1:0));
+					else if ( itm.value instanceof Float ) 		bb.putLong((long)(((Float)(itm.value)).floatValue()));
+					else if ( itm.value instanceof Short ) 		bb.putLong((long)(((Short)(itm.value)).shortValue()));
+				    else if ( itm.value instanceof Double ) 	bb.putLong((long)(((Double)(itm.value)).doubleValue()));							
 					else System.out.println("unsupported data conversion for index " + idx);
 				} break;
 				
@@ -461,6 +480,7 @@ public class NetTableToSocket
 					else if ( itm.value instanceof Short ) 		bb.put((byte)(((Short)(itm.value)).shortValue() > 0?1:0));							
 					else if ( itm.value instanceof Integer ) 	bb.put((byte)(((Integer)(itm.value)).intValue() > 0?1:0));							
 					else if ( itm.value instanceof Float ) 		bb.put((byte)(((Float)(itm.value)).floatValue() > 0?1:0));
+					else if ( itm.value instanceof Long ) 		bb.put((byte)(((Long)(itm.value)).longValue()));
 				    else if ( itm.value instanceof Double ) 	bb.put((byte)(((Double)(itm.value)).doubleValue() > 0?1:0));							
 					else System.out.println("unsupported data conversion for index " + idx);
 				} break;
