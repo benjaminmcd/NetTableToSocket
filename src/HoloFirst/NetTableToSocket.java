@@ -49,6 +49,7 @@ public class NetTableToSocket
 	private short msg_count = 0;
 
 	private boolean use_tcp = false;
+	private boolean generate_random_data = false;
 	
 	private HashMap<String, Integer> value_map = new HashMap<String, Integer>();
 	private Vector<ValueItem> value_list = new Vector<ValueItem>();
@@ -94,6 +95,12 @@ public class NetTableToSocket
 		table_listener = new MyTableListener(this);
 	}
 	
+	/**************************************************************************
+	 * 
+	 * This run method will do some initial configuration, then call the
+	 * prototype specific run method to process messages.
+	 * 
+	 *************************************************************************/
 	private void run()
 	{
 		System.out.println("Getting data from " + table_host + ":" + NetworkTable.DEFAULT_PORT);
@@ -148,6 +155,11 @@ public class NetTableToSocket
 				
 		while (! done)
 		{
+			if (generate_random_data)
+			{
+				generateRandomData();
+			}
+			
 			msg_size = buildMessage(msg_buffer);
 
 			if (msg_size > 0)
@@ -226,6 +238,10 @@ public class NetTableToSocket
 				}
 			}
 			
+			if (generate_random_data)
+			{
+				generateRandomData();
+			}
 			
 			msg_size = buildMessage(msg_buffer);
 
@@ -315,6 +331,13 @@ public class NetTableToSocket
 				this.table_host = element.getAttribute("value");
 			}
 			
+			nodes = xml.getElementsByTagName("generate_data");
+			if (nodes.getLength() >= 1)
+			{
+				Element element = (Element)(nodes.item(0));
+				this.generate_random_data = element.getAttribute("value").toLowerCase().startsWith("t");
+			}
+						
 			nodes = xml.getElementsByTagName("message");
 			if (nodes.getLength() != 1)
 			{
@@ -492,6 +515,62 @@ public class NetTableToSocket
 		bb.putShort(4, (short)size);
 		
 		return size;
+	}
+	
+	/**************************************************************************
+	 * 
+	 *************************************************************************/
+	void generateRandomData()
+	{
+		Enumeration<ValueItem> vals = value_list.elements();
+
+		while(vals.hasMoreElements())
+		{
+			ValueItem itm = vals.nextElement();
+			
+			switch(itm.type)
+			{
+				case DOUBLE:
+				{
+					double v = (double)(((Double)(itm.value)).doubleValue());
+					if (Math.abs(v) < 0.01) v = 1.0;
+					itm.value = (Double)(v + ((Math.random() - 0.5) * (v / 100.0)));
+				} break;
+				
+				case FLOAT:
+				{
+					float v = (float)(((Float)(itm.value)).floatValue());
+					if (Math.abs(v) < 0.01) v = 1.0f;
+					itm.value = (Float)(v + (float)((Math.random() - 0.5) * (v / 100.0)));
+				} break;
+			
+				case INT:
+				{
+					int v = (int)(((Integer)(itm.value)).intValue());
+					itm.value = (Integer)(v + (int)((Math.random() - 0.5) * 10));
+				} break;
+				
+				case SHORT:
+				{
+					short v = (short)(((Short)(itm.value)).shortValue());
+					itm.value = (Short)((short)(v + ((Math.random() - 0.5) * 10)));
+				} break;
+				
+				case LONG:
+				{
+					long v = (long)(((Long)(itm.value)).longValue());
+					itm.value = (Long)((long)(v + ((Math.random() - 0.5) * 10)));
+				} break;
+				
+				case BOOLEAN: 
+				{
+					if (Math.random() > 0.9)
+					{
+						itm.value = (Boolean)(! ((Boolean)(itm.value)).booleanValue());
+					}
+				} break;
+			}
+		}
 	}
 	
 	/**************************************************************************
