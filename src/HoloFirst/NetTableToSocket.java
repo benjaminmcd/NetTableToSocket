@@ -14,8 +14,12 @@ import edu.wpi.first.wpilibj.networktables.*;
 import javax.xml.parsers.*;
 import org.w3c.dom.*;
 
+
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.IOException;
 
 /******************************************************************************
  *
@@ -33,6 +37,15 @@ public class NetTableToSocket
 		DOUBLE, FLOAT, INT, SHORT, BOOLEAN, LONG
 	};
 	
+	enum MessageType
+	{
+		UNKNOWN((byte)0), PARAM_DATA((byte)1), JPEG_FRAME((byte)2), ACK((byte)0xFF), NACK((byte)0xFE);
+		
+		private final byte type_value;
+		MessageType(byte val) {type_value = val;}
+		byte value() {return type_value;}
+	};
+	
 	class ValueItem
 	{
 		public ValueType type;
@@ -40,14 +53,21 @@ public class NetTableToSocket
 	}
 	
 	private static final String TABLE_NAME = "SmartDashboard";
-	private static final float MSG_PERIOD = 0.1f; // seconds
+
 	private static final float CONNECT_PERIOD = 2.0f; // seconds
-	private static final int MESSAGE_BUFFER_SIZE = 4096;
+	private static final int MESSAGE_BUFFER_SIZE = 65536; // should be big enough to hold 640x480 jpeg image
 	private static final int MESSAGE_HEADER_SIZE = 6;
+
+	private static final long DATA_MESSAGE_PERIOD = 500; // milliseconds
+	private static final int MAX_MESSAGES_WITHOUT_ACK = 10;
+	private static final short MESSAGE_SYNC_PATTERN = (short)0xFAF0;
 	
 	private boolean done = false;
-	private short msg_count = 0;
+	private long data_msg_time = System.currentTimeMillis();
 
+	private byte data_msg_count = 0;
+	private byte jpeg_frame_msg_count = 0;
+	
 	private boolean use_tcp = false;
 	private boolean generate_random_data = false;
 	
@@ -60,6 +80,15 @@ public class NetTableToSocket
 	private int dst_port = 4322;
 	
 	private String table_host = "";
+	
+	private String video_url = "";
+	
+	private long video_msg_time = System.currentTimeMillis();
+	private int video_period = 50; // milliseconds
+
+	private long poll_period = 100; // milliseconds
+	
+	private DataInputStream video_in_stream = null;
 	
 	/**************************************************************************
 	 * 
@@ -141,7 +170,7 @@ public class NetTableToSocket
 
 		DatagramSocket send_socket = null;
 		InetAddress dst_addr = null;
-
+		
 		try 
 		{
 			send_socket = new DatagramSocket();
@@ -154,37 +183,73 @@ public class NetTableToSocket
 		}
 				
 		while (! done)
-		{
-			if (generate_random_data)
+		{	
+			long cur_time = System.currentTimeMillis();
+
+			if (cur_time >= data_msg_time)
 			{
-				generateRandomData();
+				data_msg_time += DATA_MESSAGE_PERIOD;
+
+				if (generate_random_data)
+				{
+					generateRandomData();
+				}
+
+				msg_size = buildDataMessage(msg_buffer);
+	
+				if (msg_size > 0)
+				{
+					try 
+					{
+						DatagramPacket pkt = new DatagramPacket(msg_buffer, msg_size, dst_addr, dst_port);
+						send_socket.send(pkt);
+						System.out.print("sent " + msg_size + " bytes ");
+						for(int i = 0; i < ((msg_size>16)?16:msg_size); i++)
+						{
+							System.out.print(String.format("%02X ", msg_buffer[i]));
+						}
+						System.out.println("");
+					} 
+					catch (Exception e) 
+					{
+						e.printStackTrace();
+					}
+				}
 			}
 			
-			msg_size = buildMessage(msg_buffer);
-
-			if (msg_size > 0)
+			if (video_url.length() > 1)
 			{
-				try 
+				if (cur_time >= video_msg_time)
 				{
-					DatagramPacket pkt = new DatagramPacket(msg_buffer, msg_size, dst_addr, dst_port);
-					send_socket.send(pkt);
-					System.out.print("sent " + msg_size + " bytes ");
-					for(int i = 0; i < msg_size; i++)
+					video_msg_time += video_period;
+					
+					// if there is a frame, send it
+					msg_size = buildVideoMessage(msg_buffer);
+					
+					if (msg_size > 0)
 					{
-						System.out.print(String.format("%02X ", msg_buffer[i]));
-					}
-					System.out.println("");
-				} 
-				catch (Exception e) 
-				{
-					e.printStackTrace();
-					done = true;
+						try 
+						{
+							DatagramPacket pkt = new DatagramPacket(msg_buffer, msg_size, dst_addr, dst_port);
+							send_socket.send(pkt);
+							System.out.print("sent " + msg_size + " bytes ");
+							for(int i = 0; i < ((msg_size>16)?16:msg_size); i++)
+							{
+								System.out.print(String.format("%02X ", msg_buffer[i]));
+							}
+							System.out.println("");
+						} 
+						catch (Exception e) 
+						{
+							e.printStackTrace();
+						}
+					}		
 				}
 			}
 			
 			try 
 			{
-				Thread.sleep((int)(MSG_PERIOD * 1000));
+				Thread.sleep((int)(poll_period));
 			} 
 			catch (InterruptedException e) 
 			{
@@ -206,9 +271,34 @@ public class NetTableToSocket
 
 		Socket send_socket = null;
 		DataOutputStream out_stream = null;
+		DataInputStream in_stream = null;
+		int messages_without_ack = 0;
 		
+		// To be backward compatible with the server that does not send
+		// acks, we will not terminate for too many messages without an
+		// ack until we receive at least one ack on a connection
+		boolean ack_received = false;
+		
+		if (video_url.length() > 1)
+		{
+			try 
+			{
+				URL vurl = new URL(video_url);
+				
+				HttpURLConnection vcon = (HttpURLConnection) vurl.openConnection();
+				video_in_stream = new DataInputStream(new BufferedInputStream(vcon.getInputStream()));
+			} 
+			catch (Throwable e) 
+			{
+				video_in_stream = null;
+				e.printStackTrace();
+			}
+			
+		}
 		while (! done)
 		{
+			long cur_time = System.currentTimeMillis();
+
 			if (send_socket == null)
 			{
 				System.out.println("Trying to connection to " + dst_host + ":" + dst_port + ":TCP");
@@ -218,6 +308,10 @@ public class NetTableToSocket
 					send_socket = new Socket(dst_host, dst_port);
 					
 					out_stream = new DataOutputStream(send_socket.getOutputStream());
+					in_stream = new DataInputStream(send_socket.getInputStream());
+					
+					data_msg_time = cur_time; // start sending data messages now
+					ack_received = false; // have not received an ak on this connection
 				}
 				catch (Exception e) 
 				{
@@ -238,38 +332,134 @@ public class NetTableToSocket
 				}
 			}
 			
-			if (generate_random_data)
+			if (cur_time >= data_msg_time)
 			{
-				generateRandomData();
-			}
-			
-			msg_size = buildMessage(msg_buffer);
+				data_msg_time += DATA_MESSAGE_PERIOD;
 
-			if (msg_size > 0)
-			{
+				if (generate_random_data)
+				{
+					generateRandomData();
+				}
+				
+				msg_size = buildDataMessage(msg_buffer);
+	
+				if (msg_size > 0)
+				{
+					try 
+					{
+						out_stream.write(msg_buffer, 0, msg_size);
+						System.out.print("sent " + msg_size + " bytes ");
+						for(int i = 0; i < ((msg_size>16)?16:msg_size); i++)
+						{
+							System.out.print(String.format("%02X ", msg_buffer[i]));
+						}
+						System.out.println("");
+					} 
+					catch (Exception e) 
+					{
+						System.out.println("Disconnecting, could not write to socket");
+
+						try { out_stream.close(); } catch (Exception e1) { }
+						out_stream = null;
+						
+						try { in_stream.close(); } catch (Exception e1) { }
+						in_stream = null;
+	
+						try { send_socket.close(); } catch (Exception e1) { }
+						send_socket = null;
+						continue;
+					}
+				}
+				
 				try 
 				{
-					out_stream.write(msg_buffer, 0, msg_size);
-					System.out.print("sent " + msg_size + " bytes ");
-					for(int i = 0; i < msg_size; i++)
+					long available_bytes = in_stream.available();
+					if (available_bytes > 0) // if check for ack
 					{
-						System.out.print(String.format("%02X ", msg_buffer[i]));
+						ack_received = true;
+						messages_without_ack = 0;
+						in_stream.skip(available_bytes);
 					}
-					System.out.println("");
-				} 
-				catch (Exception e) 
+					else
+					{
+						if (ack_received)
+						{
+							messages_without_ack++;
+							if (messages_without_ack > MAX_MESSAGES_WITHOUT_ACK)
+							{
+								System.out.println("Disconnecting, no ACK for " + MAX_MESSAGES_WITHOUT_ACK + " sent messages");
+								
+								try { out_stream.close(); } catch (Exception e1) { }
+								out_stream = null;
+								
+								try { in_stream.close(); } catch (Exception e1) { }
+								in_stream = null;
+			
+								try { send_socket.close(); } catch (Exception e1) { }
+								send_socket = null;			
+								continue;
+							}
+						}
+					}
+				}
+				catch (IOException e) 
 				{
+					System.out.println("Disconnecting, could not read from socket");
+					
 					try { out_stream.close(); } catch (Exception e1) { }
 					out_stream = null;
+					
+					try { in_stream.close(); } catch (Exception e1) { }
+					in_stream = null;
 
 					try { send_socket.close(); } catch (Exception e1) { }
-					send_socket = null;
+					send_socket = null;			
+					continue;
+				}
+			}
+			
+			if (video_url.length() > 1)
+			{
+				if (cur_time >= video_msg_time)
+				{
+					video_msg_time += video_period;
+
+					// if there is a frame, send it
+					msg_size = buildVideoMessage(msg_buffer);
+	
+					if (msg_size > 0)
+					{
+						try 
+						{
+							out_stream.write(msg_buffer, 0, msg_size);
+							System.out.print("sent " + msg_size + " bytes ");
+							for(int i = 0; i < ((msg_size>16)?16:msg_size); i++)
+							{
+								System.out.print(String.format("%02X ", msg_buffer[i]));
+							}
+							System.out.println("");
+						} 
+						catch (Exception e) 
+						{
+							System.out.println("Disconnecting, could not write to socket");
+	
+							try { out_stream.close(); } catch (Exception e1) { }
+							out_stream = null;
+							
+							try { in_stream.close(); } catch (Exception e1) { }
+							in_stream = null;
+		
+							try { send_socket.close(); } catch (Exception e1) { }
+							send_socket = null;
+							continue;
+						}
+					}
 				}
 			}
 			
 			try 
 			{
-				Thread.sleep((int)(MSG_PERIOD * 1000));
+				Thread.sleep((int)(poll_period));
 			} 
 			catch (InterruptedException e) 
 			{
@@ -337,7 +527,15 @@ public class NetTableToSocket
 				Element element = (Element)(nodes.item(0));
 				this.generate_random_data = element.getAttribute("value").toLowerCase().startsWith("t");
 			}
-						
+			
+			nodes = xml.getElementsByTagName("video_stream");
+			if (nodes.getLength() >= 1)
+			{
+				Element element = (Element)(nodes.item(0));
+				video_url = element.getAttribute("url");
+				video_period = (int)(Float.parseFloat(element.getAttribute("period")) * 1000.0);
+			}
+			
 			nodes = xml.getElementsByTagName("message");
 			if (nodes.getLength() != 1)
 			{
@@ -346,6 +544,9 @@ public class NetTableToSocket
 			}
 			
 			int message_size = MESSAGE_HEADER_SIZE;
+			
+			poll_period = Math.min(poll_period, video_period);
+			poll_period = Math.min(poll_period, DATA_MESSAGE_PERIOD);
 			
 			nodes = ((Element)(nodes.item(0))).getElementsByTagName("value");
 			for (int i = 0; i < nodes.getLength(); i++)
@@ -416,20 +617,24 @@ public class NetTableToSocket
 	 * 
 	 *    start   length value
 	 *    0       2      FAF3
-	 *    2       2      message count, increments with each message
-	 *    4       2      message size, total number of bytes
+	 *    2       1      message type, 0=data, 1=frame
+	 *    2       1      message sequence, increments with each message of type
+	 *    4       2      data size, number of bytes in the data part of the message
 	 *    6       xx     data
 	 *    
 	 *************************************************************************/
-	private int buildMessage(byte[] msg_buffer)
+	private int buildDataMessage(byte[] msg_buffer)
 	{
 		ByteBuffer bb = ByteBuffer.wrap(msg_buffer);
 		
 		// Put in at least a two byte sync pattern
-		bb.putShort((short)0xFAF3);
+		bb.putShort(MESSAGE_SYNC_PATTERN);
 
+		// Put in the message type
+		bb.put(MessageType.PARAM_DATA.value());
+		
 		// Put in a message counter
-		bb.putShort(msg_count++);
+		bb.put(data_msg_count++);
 
 		// Save space for message length
 		bb.putShort((short)0); 
@@ -512,9 +717,128 @@ public class NetTableToSocket
 		
 		// Put in the message length
 		int size = bb.position();
-		bb.putShort(4, (short)size);
+		bb.putShort(4, (short)(size - MESSAGE_HEADER_SIZE));
 		
 		return size;
+	}
+	
+	/**************************************************************************
+	 *
+	 * Build a video frame Message
+	 * 
+	 *    start   length value
+	 *    0       2      FAF3
+	 *    2       1      message type, 0=data, 1=frame
+	 *    2       1      message sequence, increments with each message of type
+	 *    4       2      data size, number of bytes in the data part of the message
+	 *    6       xx     data
+	 *    
+	 *************************************************************************/
+	private int buildVideoMessage(byte[] msg_buffer)
+	{
+		int size = 0;
+		
+		try
+		{
+			ByteBuffer bb = ByteBuffer.wrap(msg_buffer);
+			
+			// Put in at least a two byte sync pattern
+			bb.putShort(MESSAGE_SYNC_PATTERN);
+	
+			// Put in the message type
+			bb.put(MessageType.JPEG_FRAME.value());
+			
+			// Put in a message counter
+			bb.put(jpeg_frame_msg_count++);
+	
+			// Save space for message length
+			bb.putShort((short)0); 
+
+			if (video_in_stream != null)
+			{
+				int len = seekImage(video_in_stream);
+				
+				if (len + 6 > MESSAGE_BUFFER_SIZE)
+				{
+					video_in_stream.skip(len);
+					return 0;
+				}
+				else
+				{
+					video_in_stream.read(msg_buffer, bb.position(), len);
+					bb.position(bb.position() + len);
+//					JPEGImageDecoder d = (JPEGImageDecoder) JPEGCodec.createJPEGDecoder(video_in_stream);
+//					BufferedImage i = d.decodeAsBufferedImage();
+//					System.out.println("++++++++++++++++++ image:" + len + ", " + i.getWidth() + "x" + i.getHeight() + "++++++++++++++++++++++");
+				}
+			}
+
+			size = bb.position();
+			bb.putShort(4, (short)(size - MESSAGE_HEADER_SIZE));
+		}
+		catch (Throwable e)
+		{
+			e.printStackTrace();
+		}
+
+		return size;
+	}
+	
+	/**************************************************************************
+	 * 
+	 *************************************************************************/
+	private int seekImage(DataInputStream is)
+	{
+		byte[] key = {'C', 'o', 'n', 't', 'e', 'n', 't', '-', 'L', 'e', 'n', 'g', 't', 'h', ':', ' '};
+		int key_index = 0;
+		byte b = '.';
+		int len=0;
+		
+		try
+		{
+			// find the key sequence
+			while (key_index < 16)
+			{
+				b = video_in_stream.readByte();
+//				System.out.print((char)b);
+				if (b == key[key_index])
+				{
+					key_index++;
+				}
+				else
+				{
+					key_index = 0;
+				}
+			}
+			
+//			System.out.print("---");
+			
+			// find the end of the key sequence line
+			while (b != '\n')
+			{
+				b = video_in_stream.readByte();
+				if (Character.isDigit(b))
+				{
+					len = (len*10) + Character.getNumericValue(b);
+				}
+//				System.out.print((char)b);
+			}
+				
+			// find the end of the blank line
+			b = video_in_stream.readByte();
+			while (b != '\n')
+			{
+				b = video_in_stream.readByte();
+//				System.out.print((char)b);
+			}
+				
+		}
+		catch (Throwable e)
+		{
+			e.printStackTrace();
+		}
+		
+		return len;
 	}
 	
 	/**************************************************************************

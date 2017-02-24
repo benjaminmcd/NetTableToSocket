@@ -8,6 +8,8 @@
 	
 	<generate_data value="true" />
 	
+	<video_stream url="http://10.1.18.12/mjpg/video.mjpg" period="0.033"/>
+	
 	<message>
 	     <value name="Auton Enabled: " 		type="boolean" 	default="false" />
 	     <value name="Auton Delay: " 		type="float" 	default="0.0" />
